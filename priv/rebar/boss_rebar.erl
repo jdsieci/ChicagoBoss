@@ -40,7 +40,7 @@
 		]).
 
 -define(BOSS_PLUGIN_VERSION, 1).
--define(ERLANG_MIN_VERSION, "R15").
+-define(ERLANG_MIN_VERSION, "15").
 
 %%--------------------------------------------------------------------
 %% @doc run
@@ -54,7 +54,7 @@ run(Version, Command, RebarConf, BossConf, AppFile) when is_list(Command)->
 	run(Version, list_to_atom(Command), RebarConf, BossConf, AppFile);
 run(Version, Command, RebarConf, BossConf, AppFile) ->
     rebar_log:log(debug, "Checking rebar plugin client version and Erlang runtime version'~s'~n", [Command]),
-    ErlVsn = erlang:system_info(otp_release),
+    ErlVsn = otp_version(),
     case Version =:= ?BOSS_PLUGIN_VERSION of
         false ->
             report_bad_client_version_and_exit(BossConf);
@@ -68,6 +68,12 @@ run(Version, Command, RebarConf, BossConf, AppFile) ->
         		_ -> 
         			apply(boss_rebar, Command, [RebarConf, BossConf, AppFile])
         	end
+    end.
+
+otp_version() ->
+    case erlang:system_info(otp_release) of
+        "R" ++ Version -> Version;
+        Version -> Version
     end.
 
 %%--------------------------------------------------------------------
@@ -374,7 +380,7 @@ boss_start_wait([App|Rest]) ->
 %%--------------------------------------------------------------------
 all_ebin_dirs(BossConf, AppFile) ->
     BossAppEbinDir = all_boss_app_ebin_dirs(BossConf, AppFile) ++ all_deps_ebin_dirs(AppFile),
-    BossAppEbinDir ++ lists:foldl(fun({App, Config}, EbinDirs) ->
+    MoreEbins = lists:foldl(fun({App, Config}, EbinDirs) ->
                         case lists:keyfind(path, 1, Config) of
                             false -> EbinDirs;
                             {path, Path} ->
@@ -389,10 +395,11 @@ all_ebin_dirs(BossConf, AppFile) ->
                                         all_ebin_dirs1(Path, EbinDirs)
                                 end
                         end
-                end, [], lists:reverse(BossConf)).
+                            end, [], lists:reverse(BossConf)),
+    lists:sort(sets:to_list(sets:from_list(BossAppEbinDir ++ MoreEbins))).
 
 all_deps_ebin_dirs(AppFile)->
-    filelib:wildcard(filename:dirname(AppFile) ++ "/../deps/*/ebin").
+    filelib:wildcard("./deps/*/ebin").
 
 all_boss_app_ebin_dirs(BossConf, AppFile) ->
     Boss = proplists:get_value(boss, BossConf),
@@ -506,10 +513,10 @@ vm_name(BossConf, AppFile) ->
       {SName, _} when is_list(SName) -> {sname, SName}
     end.
 
-wm_qualified_name({Mode, Nodename}) ->
-  wm_qualified_name(Mode, Nodename).
-wm_qualified_name(Mode, Nodename) ->
-  io_lib:format("~s@~s", [Nodename, host_name(Mode)]).
+wm_qualified_name({sname, Nodename}) ->
+    io_lib:format("~s@~s", [Nodename, host_name(sname)]);
+wm_qualified_name({name, Nodename}) ->
+    io_lib:format("~s", [Nodename]).
 
 vm_name_arg(BossConf, AppFile) ->
   vm_name_arg(BossConf, AppFile, "").

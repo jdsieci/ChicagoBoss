@@ -5,17 +5,29 @@ ERL=erl
 REBAR=./rebar
 SESSION_CONFIG_DIR=priv/test_session_config
 
-.PHONY: deps get-deps
+.PHONY: deps get-deps test
 
 all:
 	@$(REBAR) get-deps
 	@$(REBAR) compile
+	@echo ""
+	@echo "*********************************************************************************"
+	@echo ""
+	@echo "CONGRATULATIONS! You've successfully built ChicagoBoss. Pat yourself on the back."
+	@echo ""
+	@echo "If you're unsure what to do next, try making a new app with:"
+	@echo ""
+	@echo "    make app PROJECT=my_project_name"
+	@echo ""
+	@echo "*********************************************************************************"
+	@echo ""
 
 boss:
 	@$(REBAR) compile skip_deps=true
 
 clean:
 	@$(REBAR) clean
+	@rm -f src/boss/*.dtl.erl
 
 edoc:
 	$(ERL) -pa ebin -pa deps/*/ebin -run boss_doc run -noshell -s init stop
@@ -23,10 +35,20 @@ edoc:
 
 app:
 	@(if ! echo "$(PROJECT)" | grep -qE '^[a-z]+[a-zA-Z0-9_@]*$$'; then echo "Project name should be a valid Erlang atom."; exit 1; fi)
-	@$(REBAR) create template=skel dest=$(DEST) src=$(PWD) appid=$(PROJECT) skip_deps=true
+	@$(REBAR) create template=skel dest=$(DEST) appid=$(PROJECT) skip_deps=true
 	@mkdir -p $(DEST)/deps
 	@cp -Rn $(PWD) $(DEST)/deps/boss
 	@mv -n $(DEST)/deps/boss/deps/* $(DEST)/deps/
+	@echo ""
+	@echo "***********************************************************************"
+	@echo ""
+	@echo "Your new app is created. You should head over there now:"
+	@echo ""
+	@echo "    cd $(DEST)"
+	@echo ""
+	@echo "***********************************************************************"
+	@echo ""
+	
 
 get-deps:
 	@$(REBAR) get-deps
@@ -54,6 +76,7 @@ rebarize:
 	@chmod +x $(APPDIR)/init.sh
 	@cp skel/init-dev.sh $(APPDIR)
 	@chmod +x $(APPDIR)/init-dev.sh
+	@cp skel/boss.config.* $(APPDIR)
 	@cp skel/rebar $(APPDIR)
 	@chmod +x $(APPDIR)/rebar
 	@cp skel/rebar.config $(APPDIR)

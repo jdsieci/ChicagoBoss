@@ -21,8 +21,20 @@ handle_request(Req, RequestMod, ResponseMod) ->
 									     FullUrl, 
 									     LoadedApplications),
     lager:notice("ApplicationForPath ~p~n", [ApplicationForPath]),
-    handle_application(Req, ResponseMod, Request, FullUrl,
-	               ApplicationForPath).
+    
+    try
+	handle_application(Req, ResponseMod, Request, FullUrl, ApplicationForPath)
+    catch Class:Error ->
+	%% Nuclear option: Something very serious happened and we don't want to
+	%% fail silently, but instead it should generate an error message.
+	lager:error("Unhandled Error: ~p:~p. Stacktrace: ~p", [Class, Error, erlang:get_stacktrace()]),
+	handle_fatal_error(Req, ResponseMod)
+    end.
+
+handle_fatal_error(Req, ResponseMod) ->
+	Response = simple_bridge:make_response(ResponseMod, {Req, undefined}),
+	Response1 = (Response:status_code(500)):data(["An unhandled and unrecoverable error occurred. Please check error logs."]),
+	Response1:build_response().
 
 handle_application(Req, ResponseMod, _Request, _FullUrl, undefined) ->
     Response		= simple_bridge:make_response(ResponseMod, {Req, undefined}),
@@ -30,7 +42,7 @@ handle_application(Req, ResponseMod, _Request, _FullUrl, undefined) ->
     Response1:build_response();
 handle_application(Req, ResponseMod, Request, FullUrl,  App) ->
     BaseURL		= boss_web:base_url(App),
-    DocRoot                = boss_files_util:static_path(App),
+    DocRoot             = boss_files_util:static_path(App),
     StaticPrefix	= boss_web:static_prefix(App),
     Url			= lists:nthtail(length(BaseURL), FullUrl),
     Response		= simple_bridge:make_response(ResponseMod, {Req, DocRoot}),
@@ -80,7 +92,14 @@ dev_headers(Response, _) ->
     
 
 make_etag(App, StaticPrefix, File) ->
-    FilePath      = code:priv_dir(App) ++ "/" ++ StaticPrefix ++ "/" ++ File,
+	Priv = case code:priv_dir(App) of
+		{error, bad_name} ->
+			%% enuit isn't loading the application, so this will default for us
+			"../priv";
+		P ->
+			P
+	end,
+    FilePath      = Priv ++ "/" ++ StaticPrefix ++ "/" ++ File,
     case file:read_file(FilePath) of
     	{ok, Content} -> 
     		binary_to_list(base64:encode(crypto:hash(sha, Content)));
@@ -218,8 +237,9 @@ process_dynamic_request(#boss_app_info{ router_pid = RouterPid } = AppInfo, Req,
     {Result, SessionID1} = case boss_router:route(RouterPid, Url) of
 			       {ok, {Application, Controller, Action, Tokens}} when Application =:= AppInfo#boss_app_info.application ->
 				   Location = {Controller, Action, Tokens},
-				   
-				   ExecuteResults = load_and_execute(Mode, Location, AppInfo, [{request, Req}]),
+				  
+				   RequestContext = [{request, Req}], 
+				   ExecuteResults = load_and_execute(Mode, Location, AppInfo, RequestContext),
 
 				   case  ExecuteResults of
 				       {'EXIT', Reason} ->
@@ -347,10 +367,18 @@ process_result(AppInfo, _, {moved, Where, Headers}) ->
     {301, [{"Location", AppInfo#boss_app_info.base_url ++ Where}, {"Cache-Control", "no-cache"}|Headers], ""};
 process_result(_, _, {moved_external, Where, Headers}) ->
     {301, [{"Location", Where}, {"Cache-Control", "no-cache"}|Headers], ""};
+% allow external redirect with absolute url
 process_result(AppInfo, Req, {redirect, "http://"++Where, Headers}) ->
     process_result(AppInfo, Req, {redirect_external, "http://"++Where, Headers});
 process_result(AppInfo, Req, {redirect, "https://"++Where, Headers}) ->
     process_result(AppInfo, Req, {redirect_external, "https://"++Where, Headers});
+% allow internal redirect with relative urls
+process_result(AppInfo, Req, {redirect, "/"++Where, Headers}) ->
+    process_result(AppInfo, Req, {redirect_external, "/"++Where, Headers});
+process_result(AppInfo, Req, {redirect, "./"++Where, Headers}) ->
+    process_result(AppInfo, Req, {redirect_external, "./"++Where, Headers});
+process_result(AppInfo, Req, {redirect, "../"++Where, Headers}) ->
+    process_result(AppInfo, Req, {redirect_external, "../"++Where, Headers});
 process_result(AppInfo, Req, {redirect, {Application, Controller, Action, Params}, Headers}) ->
     {RouterPid, AppInfo1, Application1} = if
         AppInfo#boss_app_info.application =:= Application ->
@@ -377,7 +405,7 @@ process_result(_, _, {error, Payload, Headers}) ->
     {500, boss_web_controller:merge_headers(Headers, [{"Content-Type", "text/html"}]), Payload};
 process_result(_, _, {StatusCode, Payload, Headers}) when is_integer(StatusCode) ->
     {StatusCode, boss_web_controller:merge_headers(Headers, [{"Content-Type", "text/html"}]), Payload}.
-
+	
 load_and_execute(Mode, {Controller, _, _} = Location, AppInfo, RequestContext) when Mode =:= production; Mode =:= testing->
     case boss_files:is_controller_present(AppInfo#boss_app_info.application, Controller,
             AppInfo#boss_app_info.controller_modules) of
